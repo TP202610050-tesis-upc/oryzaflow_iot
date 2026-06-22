@@ -47,15 +47,19 @@ los datos hacia Spring Boot hay que crear un **Rule Chain** en ThingsBoard. Deci
 > **DECISIÓN (2026-06-21): opción B** — para respetar el diseño "backend = suscriptor
 > MQTT". La nota de [[oryzaflow-backend-stack]] (Paho/spring-integration-mqtt) **sí aplica**.
 
-### Contrato de ingesta (opción B)
-- Broker MQTT propio (p. ej. Mosquitto/EMQX) entre ThingsBoard y el backend.
-- ThingsBoard: **Rule Chain** con un nodo *MQTT* que publica la telemetría del device a
-  un tópico del broker, p. ej. `oryzaflow/telemetry/{deviceName}`.
-- Backend: cliente **Paho / spring-integration-mqtt** suscrito a ese tópico.
-- Payload: el JSON del §2 (configurar el nodo para incluir `deviceName`).
-- El backend mapea claves cortas → `LECTURA` y último valor del nodo (ver `ESQUEMA §7`).
-- Reglas: tolerar ausencia de campos tipo B (lote inactivo) y de `dr` (1ª lectura).
-- **Pendiente IoT (próxima sesión):** levantar el broker y crear el Rule Chain en TB.
+### Contrato de ingesta (opción B) — ✅ PUENTE MONTADO Y VERIFICADO (2026-06-22)
+- **Broker:** HiveMQ Cloud (serverless free), TLS **8883**. Host/credenciales en
+  `bridge/broker_config.py` (gitignored). Usuario `oryzaflow-iot`.
+- **ThingsBoard:** Rule Chain "Root" con nodo *MQTT* `to-hivemq` colgado de
+  *Message Type Switch → Post telemetry*; SSL activado; publica a tópico
+  **`oryzaflow/telemetry/${deviceName}`** → en vivo: `oryzaflow/telemetry/oryzaflow-edge-01`.
+- **Backend (a implementar):** cliente **Paho / spring-integration-mqtt** suscrito a
+  `oryzaflow/telemetry/#` (o `.../oryzaflow-edge-01`) sobre TLS 8883 con esas credenciales.
+- Payload recibido (real, verificado por suscriptor de prueba `bridge/mqtt_test_subscriber.py`):
+  `{"t":24.41,"rh":67.25,"rain":false,"me":17.14,"lot":true,"m":22.0,"mr":0.9998,"te":0.0}`.
+- El backend mapea claves cortas → `LECTURA` y último valor del nodo (ver `ESQUEMA §7`);
+  el `deviceName` del tópico identifica el nodo. Tolerar ausencia de campos tipo B y de `dr`.
+- **Verificación end-to-end:** edge → TB(nube) → Rule Chain → HiveMQ → suscriptor. OK.
 
 ## 4. Aprovisionamiento backend → edge (sentido inverso)
 

@@ -1,5 +1,7 @@
 # --- Credenciales locales: NUNCA commitear ---
 firmware/oryzaflow_edge/secrets.h
+bridge/broker_config.py
+__pycache__/
 
 # --- Artefactos de compilación Arduino / arduino-cli ---
 build/
