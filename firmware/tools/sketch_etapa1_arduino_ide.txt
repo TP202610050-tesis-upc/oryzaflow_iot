@@ -1,0 +1,127 @@
+// ============================================================================
+// OryzaFlow edge - ETAPA 1 (diagnostico de sensores) - ARCHIVO UNICO
+// Placa: Heltec WiFi LoRa 32 V3 (ESP32-S3). Lee SHT31 (T/HR) + YL-83 (lluvia)
+// y los imprime por Serial. Incluye escaneo I2C y prueba de SDA/SCL invertidos.
+//
+// COMO USAR EN ARDUINO IDE:
+//   1) Archivo > Nuevo Sketch. Borra todo y PEGA este contenido.
+//   2) Herramientas > Placa > "Heltec ESP32 Series Dev-boards" > "WiFi LoRa 32(V3)".
+//   3) Herramientas > Puerto > COM8.
+//   4) Subir (flecha ->). Luego abre el Monitor Serie a 115200 baudios.
+// ============================================================================
+#include <Arduino.h>
+#include <Wire.h>
+
+// ---- Pines (cableado actual) ----
+#define PIN_SHT31_SDA   41
+#define PIN_SHT31_SCL   42
+#define PIN_RAIN_DO      6     // YL-83 digital -> lluvia (bool)
+#define PIN_RAIN_AO      7     // YL-83 analogico -> intensidad (extra)
+#define SHT31_I2C_ADDR  0x44  // 0x45 si el pin ADDR va a VDD
+#define RAIN_ACTIVE_LOW  1     // DO en LOW = lluvia
+#define SERIAL_BAUD  115200
+
+// ---- Offsets de calibracion (HU-44); por ahora 0 ----
+#define OFFSET_T   0.0f
+#define OFFSET_RH  0.0f
+
+// SHT31 en el segundo bus I2C (Wire1) para no chocar con el OLED (Wire, 17/18).
+TwoWire& BUS = Wire1;
+
+// ---------- Driver minimo SHT31 ----------
+static uint8_t sht31Crc8(const uint8_t* d, int n) {
+  uint8_t crc = 0xFF;
+  for (int i = 0; i < n; i++) {
+    crc ^= d[i];
+    for (int b = 0; b < 8; b++)
+      crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x31) : (uint8_t)(crc << 1);
+  }
+  return crc;
+}
+
+static bool sht31Begin() {                 // soft reset 0x30A2
+  BUS.beginTransmission(SHT31_I2C_ADDR);
+  BUS.write(0x30); BUS.write(0xA2);
+  bool ok = (BUS.endTransmission() == 0);
+  delay(2);
+  return ok;
+}
+
+// Lectura puntual alta repetibilidad (0x2400). Devuelve true si OK (con CRC).
+static bool sht31Read(float& tempC, float& humPct) {
+  BUS.beginTransmission(SHT31_I2C_ADDR);
+  BUS.write(0x24); BUS.write(0x00);
+  if (BUS.endTransmission() != 0) return false;
+  delay(20);
+  if (BUS.requestFrom((int)SHT31_I2C_ADDR, (int)6) != 6) return false;
+  uint8_t b[6];
+  for (int i = 0; i < 6; i++) b[i] = BUS.read();
+  if (sht31Crc8(b, 2) != b[2] || sht31Crc8(b + 3, 2) != b[5]) return false;
+  uint16_t rawT = ((uint16_t)b[0] << 8) | b[1];
+  uint16_t rawH = ((uint16_t)b[3] << 8) | b[4];
+  tempC  = -45.0f + 175.0f * (float)rawT / 65535.0f;
+  humPct = 100.0f * (float)rawH / 65535.0f;
+  return true;
+}
+
+// ---------- Utilidades ----------
+static void i2cScan() {
+  Serial.print("[i2c] escaneo bus (41/42): ");
+  int n = 0;
+  for (uint8_t a = 1; a < 127; a++) {
+    BUS.beginTransmission(a);
+    if (BUS.endTransmission() == 0) { Serial.printf("0x%02X ", a); n++; }
+  }
+  Serial.println(n ? "" : "(nada encontrado)");
+}
+
+static bool rainDetected() {
+  int v = digitalRead(PIN_RAIN_DO);
+  return RAIN_ACTIVE_LOW ? (v == LOW) : (v == HIGH);
+}
+
+void setup() {
+  Serial.begin(SERIAL_BAUD);
+  delay(400);
+  Serial.println("\n=== OryzaFlow edge - Etapa 1: sensores ===");
+
+  pinMode(PIN_RAIN_DO, INPUT);
+  analogReadResolution(12);
+
+  // Nivel de las lineas I2C con pull-up interno (diagnostico)
+  pinMode(PIN_SHT31_SDA, INPUT_PULLUP);
+  pinMode(PIN_SHT31_SCL, INPUT_PULLUP);
+  delay(5);
+  Serial.printf("[i2c] nivel pull-up interno: SDA(41)=%s  SCL(42)=%s\n",
+                digitalRead(PIN_SHT31_SDA) ? "HIGH" : "LOW",
+                digitalRead(PIN_SHT31_SCL) ? "HIGH" : "LOW");
+
+  BUS.begin(PIN_SHT31_SDA, PIN_SHT31_SCL, 100000);  // 100 kHz
+  i2cScan();
+
+  // Prueba con SDA/SCL invertidos por si el modulo esta al reves
+  Serial.println("[i2c] probe INVERTIDO (SDA=42, SCL=41):");
+  BUS.end();
+  BUS.begin(PIN_SHT31_SCL, PIN_SHT31_SDA, 100000);
+  i2cScan();
+  BUS.end();
+  BUS.begin(PIN_SHT31_SDA, PIN_SHT31_SCL, 100000);  // restaurar
+
+  Serial.println(sht31Begin() ? "[sht31] OK" :
+                 "[sht31] WARN: no responde (revisar 3V3-GND-SDA41-SCL42 del modulo)");
+}
+
+void loop() {
+  i2cScan();  // diagnostico cada ciclo (quitar cuando ya funcione)
+
+  float t, rh;
+  bool ok = sht31Read(t, rh);
+  bool rain = rainDetected();
+  int  rainAo = analogRead(PIN_RAIN_AO);
+
+  if (ok) Serial.printf("T=%.2f C  HR=%.2f %%  ", t + OFFSET_T, rh + OFFSET_RH);
+  else    Serial.print("T=--.-- C  HR=--.-- %  (SHT31 fail)  ");
+  Serial.printf("lluvia=%-3s (AO=%4d)\n", rain ? "SI" : "no", rainAo);
+
+  delay(2000);
+}

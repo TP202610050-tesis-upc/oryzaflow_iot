@@ -1,0 +1,40 @@
+# ============================================================================
+# OryzaFlow edge - Monitor serie (COM8 @ 115200)
+# Resetea la placa, muestra el arranque y luego imprime en vivo.
+# Detener: Ctrl + C
+#
+# COMO EJECUTAR (cualquiera de las dos):
+#   A) Abre PowerShell y PEGA todo este contenido (de la linea $puerto hacia abajo).
+#   B) Guarda este archivo como  monitor_serial.ps1  y corre:
+#        powershell -ExecutionPolicy Bypass -File .\monitor_serial.ps1
+# ============================================================================
+
+$puerto = 'COM8'
+$baud   = 115200
+
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8   # acentos correctos
+
+$port = New-Object System.IO.Ports.SerialPort($puerto, $baud)
+$port.DtrEnable = $false
+$port.RtsEnable = $false
+$port.ReadTimeout = 1500
+$port.Encoding = [System.Text.Encoding]::UTF8
+
+try {
+    $port.Open()
+    Write-Host "== Monitor $puerto @ $baud  (Ctrl+C para salir) ==" -ForegroundColor Cyan
+
+    # Pulso de reset (EN low->high) para capturar setup() / escaneo I2C
+    $port.RtsEnable = $true
+    Start-Sleep -Milliseconds 120
+    $port.RtsEnable = $false
+
+    while ($true) {
+        try { Write-Host $port.ReadLine() }
+        catch [System.TimeoutException] { }   # sin datos en este intervalo: seguir
+    }
+}
+finally {
+    if ($port.IsOpen) { $port.Close() }
+    Write-Host "== Puerto cerrado ==" -ForegroundColor Cyan
+}

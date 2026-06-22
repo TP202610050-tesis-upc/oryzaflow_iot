@@ -1,0 +1,16 @@
+# --- Credenciales locales: NUNCA commitear ---
+firmware/oryzaflow_edge/secrets.h
+
+# --- Artefactos de compilación Arduino / arduino-cli ---
+build/
+*.bin
+*.elf
+*.hex
+*.map
+*.d.o
+*.a
+
+# --- SO / editor ---
+.DS_Store
+Thumbs.db
+*.swp
