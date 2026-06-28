@@ -1,7 +1,7 @@
 // ============================================================================
 // OryzaFlow edge — firmware (Heltec WiFi LoRa 32 V3 / ESP32-S3)
-// ETAPA 2: sensores -> modelo de secado -> JSON canónico de telemetría.
-// (Etapa 1 sensores: OK. Falta: OLED, transporte WiFi/LoRaWAN, aprovisionamiento.)
+// Sensores -> modelo de secado -> JSON canónico -> ThingsBoard (WiFi/MQTT).
+// ETAPA 4a: el lote lo aprovisiona el backend por shared attributes (sin hardcode).
 // Esquema: oryzaflow_iot/docs/ESQUEMA_TELEMETRIA.md
 // ============================================================================
 #include "config.h"
@@ -10,11 +10,12 @@
 #include "telemetry.h"
 #include "display_oled.h"
 #include "net_thingsboard.h"
+#include "provisioning.h"
 
 static Sht31 sht(Wire1, SHT31_I2C_ADDR);
 
-// Parámetros del lote. EN ETAPA 2 se fijan aquí a mano (placeholder);
-// en la Etapa 4 los empuja el backend por shared attributes.
+// Parámetros del lote: los aprovisiona el backend por shared attributes (Etapa 4a).
+// Arranca INACTIVO -> el edge publica solo tipo A hasta que llegue un lote.
 static LotParams g_lot;
 
 // Offsets de calibración vigentes (los sobreescribirá el aprovisionamiento).
@@ -25,10 +26,10 @@ static float g_offsetM  = DEFAULT_OFFSET_M;
 // Estado para DR (M de la publicación anterior).
 static float g_prevM = -1.0f;
 
-// Cadencia de publicación de producción (PUBLISH_INTERVAL_S = 300 s, ver §4 esquema).
-static const uint32_t PUBLISH_MS = (uint32_t)PUBLISH_INTERVAL_S * 1000UL;
+// Cadencia de publicación (default §4; el aprovisionamiento la ajusta vía intervaloEnvioSegundos).
+static uint32_t g_publishMs = (uint32_t)PUBLISH_INTERVAL_S * 1000UL;
 static uint32_t g_lastPublish = 0;
-static bool     g_firstPublish = true;  // publica pronto al arrancar, luego cada PUBLISH_MS
+static bool     g_firstPublish = true;  // publica pronto al arrancar, luego cada g_publishMs
 
 static void i2cScan(TwoWire& bus) {
   Serial.print("[i2c] escaneo bus SHT31 (41/42): ");
@@ -66,6 +67,12 @@ static void selfTestModel() {
   Serial.println("--- fin self-test ---");
 }
 
+// Consume el aprovisionamiento del backend (shared attributes de ThingsBoard, Etapa 4a):
+// llena el lote y los offsets/cadencia vigentes.
+static void onAttributes(const char* json, unsigned int len) {
+  applyAttributes(json, len, g_lot, g_offsetT, g_offsetRH, g_publishMs);
+}
+
 void setup() {
   Serial.begin(SERIAL_BAUD);
   delay(400);
@@ -82,24 +89,17 @@ void setup() {
 
   selfTestModel();
 
-  // Lote de prueba ACTIVO desde el arranque (placeholder de aprovisionamiento).
-  g_lot.active  = true;
-  g_lot.startMs = 0;            // inicio = boot
-  g_lot.m0      = 22.0f;
-  g_lot.mTarget = 13.0f;
-  g_lot.k       = 0.12f;
-  g_lot.n       = 1.05f;
-  g_lot.offsetM = g_offsetM;
-  Serial.println("[lote] placeholder activo: M0=22 Mt=13 k=0.12 n=1.05");
-
-  netBegin();  // WiFi + MQTT a ThingsBoard
+  // ETAPA 4a: sin lote hardcodeado. El lote llega por aprovisionamiento (shared attributes).
+  netSetAttributeHandler(onAttributes);
+  netBegin();                  // conecta WiFi (MQTT se conecta en el loop)
+  provisioningSyncTime(8000);  // NTP antes del 1er MQTT connect -> mapea loteInicioTs a t real
 }
 
 void loop() {
   netLoop();  // mantiene WiFi/MQTT vivos (no bloqueante)
 
   uint32_t now = millis();
-  if (!g_firstPublish && (now - g_lastPublish < PUBLISH_MS)) { delay(20); return; }
+  if (!g_firstPublish && (now - g_lastPublish < g_publishMs)) { delay(20); return; }
   g_firstPublish = false;
 
   float dtHours = (now - g_lastPublish) / 3600000.0f * MODEL_TIME_SCALE;
