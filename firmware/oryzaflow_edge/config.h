@@ -24,14 +24,26 @@
 #define SAMPLE_INTERVAL_MS   60000UL  // muestreo de sensores (suaviza ruido)
 #define PUBLISH_INTERVAL_S   150      // publicación de telemetría 2.5 min (configurable por atributo)
 
-// ---- Constantes del modelo (CONTEXTO_PROYECTO §7) ----
-// Henderson modificado:  Me = ( -ln(1-HR) / (A*(T+C)) )^(1/B)   con HR en fracción, T en °C
-// FALLO CONOCIDO (docs/fallos_firmware.md, F1 y F2): la forma es de Henderson pero C=35.703 pertenece a la
-// familia Chung-Pfost (ASAE D245.4); A y B no tienen fuente; y la ecuación devuelve % base SECA mientras
-// m0/mTarget llegan en % base HÚMEDA. Sustituir por Chung-Pfost modificada con constantes citadas y convertir a b.h.
-#define HENDERSON_A  2.448e-5f
-#define HENDERSON_B  2.334f
-#define HENDERSON_C  35.703f
+// ---- Constantes del modelo (CONTEXTO_PROYECTO §7; docs/fallos_firmware.md F1/F2) ----
+// Humedad de equilibrio: Chung-Pfost modificada para arroz cascara (forma ASAE D245.4):
+//   Me_bs [% base seca] = CP_E - CP_F * ln[ -(T + CP_C) * ln(HR) ]     T en °C, HR en fraccion (0-1)
+//   equivalente a HR = exp[-A/(T+C) * exp(-B*M)] con A=594.85, B=21.732, C=35.703 y M en decimal b.s.
+//   (E = 100*ln(A)/B = 29.394, F = 100/B = 4.6015).
+// Fuente de las constantes: Basunia, M. A. y Abe, T. (2001). Thin-layer solar drying characteristics of
+// rough rice under natural convection. J. Food Eng. 47(4), 295-301 (usan ASAE D245.4).
+// TODO(fuente): confirmar contra el texto de ASAE D245.4/D245.5 cuando el equipo lo tenga (PENDIENTES 1.6).
+// La ecuacion devuelve % base SECA; el edge la convierte a % base HUMEDA (moisture_bs_to_bh) antes de usarla.
+#define CP_E  29.394f
+#define CP_F  4.6015f
+#define CP_C  35.703f
+
+// Alternativas (Henderson modificada, Steffe-Singh) seleccionables por el atributo compartido meModel:
+// TODO(fuente): sin constantes citadas de ASAE D245 no se implementan; hoy solo "chung_pfost".
+
+// Guardas numericas de la integracion por pasos (F10)
+#define MODEL_EPS      1e-4f   // (M0 - Me) por debajo de esto => no hay potencial de secado
+#define MODEL_MR_MIN   1e-6f   // cota inferior de MR_prev antes de invertir el modelo
+#define MODEL_T_MAX_H  500.0f  // horizonte de la biseccion (Midilli general) [h]
 
 // ---- Meta del lote y banda de conformidad (Protocolo de campo v1.0, 2026-09-21) ----
 // Convención: TODAS las humedades de grano (m0, mTarget, m, me, offsetM) se expresan en % base húmeda (b.h.).
@@ -51,7 +63,10 @@
 // Reloj real por NTP (para mapear loteInicioTs absoluto -> t del modelo).
 #define NTP_SERVER  "pool.ntp.org"
 // Claves que el edge pide a ThingsBoard (deben coincidir con ProvisioningService del backend).
-#define TB_SHARED_KEYS  "loteId,loteInicioTs,m0,mTarget,perfil,k,n,intervaloEnvioSegundos,offsetT,offsetRh,offsetM,tMax"
+#define TB_SHARED_KEYS  "loteId,loteInicioTs,m0,mTarget,perfil,k,n,modelo,a,b,segmento,meModel,intervaloEnvioSegundos,offsetT,offsetRh,offsetM,tMax"
+
+// ---- Version de firmware (client attribute fwVersion, ESQUEMA §6; docs/equivalencia_nodo_offline.md) ----
+#define FW_VERSION  "1.1.0"
 
 // ---- Serial ----
 #define SERIAL_BAUD  115200

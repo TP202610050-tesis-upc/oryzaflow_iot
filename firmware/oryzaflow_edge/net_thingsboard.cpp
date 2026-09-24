@@ -10,15 +10,26 @@ static char         statusBuf[20] = "init";
 static uint32_t     lastMqttTry = 0;
 static const uint32_t MQTT_RETRY_MS = 5000;
 static AttrHandler  attrHandler = nullptr;
+static uint32_t     publishIntervalS = PUBLISH_INTERVAL_S;
 
 static void setStatus(const char* s) { strncpy(statusBuf, s, sizeof(statusBuf) - 1); }
 
 void netSetAttributeHandler(AttrHandler fn) { attrHandler = fn; }
+void netSetPublishIntervalS(uint32_t s) { if (s > 0) publishIntervalS = s; }
 
 // Atributos de ThingsBoard: tópicos v1/devices/me/attributes (push) y .../response/+ (request).
 static void onMqttMessage(char* topic, byte* payload, unsigned int len) {
   if (attrHandler && strncmp(topic, "v1/devices/me/attributes", 24) == 0)
     attrHandler((const char*)payload, len);
+}
+
+// Client attributes (ESQUEMA §6): estado del nodo que cambia poco. Se publican al conectar.
+static void publishClientAttributes() {
+  char attrs[160];
+  snprintf(attrs, sizeof(attrs),
+           "{\"fwVersion\":\"%s\",\"transport\":\"wifi\",\"intervaloEnvioSegundos\":%lu,\"ip\":\"%s\",\"rssi\":%d}",
+           FW_VERSION, (unsigned long)publishIntervalS, WiFi.localIP().toString().c_str(), WiFi.RSSI());
+  mqtt.publish("v1/devices/me/attributes", attrs);
 }
 
 static void wifiConnect() {
@@ -59,7 +70,8 @@ static bool mqttConnect() {
     mqtt.subscribe("v1/devices/me/attributes");
     mqtt.subscribe("v1/devices/me/attributes/response/+");
     mqtt.publish("v1/devices/me/attributes/request/1", "{\"sharedKeys\":\"" TB_SHARED_KEYS "\"}");
-    Serial.println("[mqtt] suscrito a atributos + pedido de aprovisionamiento");
+    publishClientAttributes();
+    Serial.println("[mqtt] suscrito a atributos + pedido de aprovisionamiento + fwVersion " FW_VERSION);
     return true;
   }
   Serial.printf("[mqtt] fallo rc=%d (5=token malo, 2=rechazado)\n", mqtt.state());

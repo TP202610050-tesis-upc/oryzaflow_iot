@@ -1,7 +1,7 @@
 #pragma once
 // Construcción del JSON canónico de telemetría (ESQUEMA_TELEMETRIA.md §2).
-// Reglas de presencia: t/rh/rain/me/lot siempre; m/mr/te solo si lote activo;
-// dr solo si además hay M previa. Sin dependencias (snprintf).
+// Reglas de presencia: t/rh/rain/me/lot siempre; m/mr/te/om solo si lote activo;
+// dr solo si además hay M previa; seg solo si el backend aprovisionó un segmento. Sin dependencias (snprintf).
 #include <Arduino.h>
 #include "drying_model.h"
 

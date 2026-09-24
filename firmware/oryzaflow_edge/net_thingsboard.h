@@ -13,3 +13,4 @@ bool        netConnected();             // WiFi + MQTT ok
 bool        netPublish(const char* json);  // publica telemetría (false si no conectado)
 const char* netStatus();                // texto corto para el OLED
 void        netSetAttributeHandler(AttrHandler fn);  // registra el consumidor de shared attributes
+void        netSetPublishIntervalS(uint32_t s);      // cadencia vigente (se reporta como client attribute, §6)

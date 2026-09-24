@@ -1,5 +1,6 @@
 #include "display_oled.h"
 #include "HT_SSD1306Wire.h"   // librería Heltec_ESP32_Dev-Boards
+#include "config.h"
 
 // Pines OLED y Vext los define el core para la placa V3 (SDA_OLED=17, SCL_OLED=18,
 // RST_OLED=21, Vext=36).
@@ -17,7 +18,7 @@ void displayBegin() {
   oled.setTextAlignment(TEXT_ALIGN_LEFT);
   oled.drawString(0, 0, "OryzaFlow");
   oled.setFont(ArialMT_Plain_10);
-  oled.drawString(0, 20, "edge v1.0");
+  oled.drawString(0, 20, "edge v" FW_VERSION);
   oled.drawString(0, 34, "iniciando...");
   oled.display();
 }

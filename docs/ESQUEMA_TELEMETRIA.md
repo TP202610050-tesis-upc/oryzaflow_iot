@@ -1,6 +1,8 @@
 # OryzaFlow — Esquema de Telemetría del Edge (contrato congelado)
 
-> **Estado:** CONGELADO v1.0 — 2026-06-21.
+> **Estado:** CONGELADO v1.1 — 2026-09-24 (v1.0: 2026-06-21). Cambios v1.1 (docs/fallos_firmware.md F1/F2/F3/F8/F4):
+> `me` pasa a Chung–Pfost modificada en **% base húmeda**; nuevas claves opcionales `om` y `seg`;
+> nuevos atributos `segmento`, `modelo`, `a`, `b`, `meModel`; `loteInicioTs` es el inicio del **segmento**.
 > Este documento es la **fuente de verdad** de lo que el edge (ESP32) publica a
 > ThingsBoard y, por tanto, de lo que el backend (Spring Boot) ingiere por MQTT y
 > persiste. Cualquier cambio de campo/tipo/unidad rompe el contrato edge↔backend↔móvil
@@ -49,27 +51,43 @@ mediante un **interruptor de transporte** en el firmware:
 | Categoría | Campos | Origen |
 |---|---|---|
 | **Crudo (sensado)** | `t`, `rh`, `rain` | SHT31 (T°, HR) + YL-83 (lluvia digital) |
-| **Derivado tipo A** (solo ambiente) | `me` | Henderson modificado — el edge lo calcula **siempre** (autónomo) |
-| **Derivado tipo B** (contexto de lote) | `m`, `mr`, `dr`, `te` | Page — **requiere** parámetros aprovisionados por el backend (§3) |
+| **Derivado tipo A** (solo ambiente) | `me` | Chung–Pfost modificada (b.h.) — el edge lo calcula **siempre** (autónomo) |
+| **Derivado tipo B** (contexto de lote) | `m`, `mr`, `dr`, `te`, `om`, `seg` | Page / Midilli por pasos — **requiere** parámetros aprovisionados por el backend (§3) |
 
 > **Clave del modelo:** el ESP32 **no tiene sensor de humedad de grano**. `m = M(t)`
-> se **modela** con Page a partir del *tiempo transcurrido del lote* y de `me` actual:
+> se **modela** (Page o Midilli) a partir del tiempo de exposición del *segmento diario* y de `me`
+> actual. **Convención (F2): todas las humedades de grano (`me`, `m`, `m0`, `mTarget`, `offsetM`) son
+> % base húmeda (b.h.)**, la base del medidor PM-410 y del comercio.
 >
 > ```
-> Me  = ( −ln(1 − HR) / ( A·(T + C) ) )^(1/B)        (Henderson; A=2.448e-5, B=2.334, C=35.703)
-> MR  = exp( −k · tⁿ )                                (Page; t = horas desde inicio del lote)
-> M(t)= Me + (M₀ − Me)·MR                              (despeje de MR = (M−Me)/(M₀−Me))
-> DR  = (M_prev − M(t)) / Δt_horas       [%/h]        (entre dos publicaciones)
-> te  = ( −ln(MR_obj) / k )^(1/n) − t     [h]         (tiempo restante; MR_obj=(M_target−Me)/(M₀−Me))
+> Me_bs = E − F · ln[ −(T + C) · ln(HR) ]              (Chung–Pfost modificada, % b.s.; T °C, HR fracción)
+>         E = 29.394, F = 4.6015, C = 35.703          (ASAE D245.4, arroz cáscara; Basunia y Abe 2001)
+> Me    = 100·Me_bs / (100 + Me_bs)                    (conversión a % b.h. — F2)
+> MR(t) = exp( −k · tⁿ )                               (Page)      |  a·exp(−k·tⁿ) + b·t  (Midilli, modelo=MIDILLI)
 > ```
 >
-> Por eso el edge necesita del backend `M₀, M_target, k, n` **y** el instante de
-> inicio del lote (§3). Sin lote activo, el edge solo emite los campos tipo A/crudos.
+> **Integración por pasos con tiempo equivalente (F10):** `Me` cambia cada ciclo, así que la forma
+> cerrada NO se evalúa con el tiempo total. En cada publicación:
+> ```
+> MR_prev = (M_prev − Me) / (M₀ − Me)                  (M_prev = M del ciclo anterior, sin offset)
+> si MR_prev ≤ 0 (grano en/bajo el equilibrio actual): M = M_prev   (sin secado; no se modela readsorción)
+> si no: t_eq = MR⁻¹(MR_prev);  M = Me + (M₀ − Me)·MR(t_eq + Δt)     (Δt = horas desde la publicación anterior)
+> mr  = (M − Me)/(M₀ − Me)                             (razón actual, acotada a [0,1])
+> dr  = (M_prev − M)/Δt                    [%/h]        (entre dos publicaciones; se omite en la 1ª del segmento)
+> te  = MR⁻¹(MR_obj) − (t_eq + Δt)         [h]          (MR_obj = (M_target − Me)/(M₀ − Me); 0 si inviable o cumplida)
+> m   = M + offsetM                                     (offsetM debe ser 0 en campaña — F8; se publica en `om`)
+> ```
+> El **primer ciclo** del segmento (o tras un reinicio a mitad de segmento) usa la forma cerrada
+> `M = Me + (M₀ − Me)·MR(t)` con `t = now − loteInicioTs`, única opción sin historial.
+>
+> Por eso el edge necesita del backend `M₀` (del segmento), `M_target`, `k`, `n` (y `modelo/a/b`) **y** el
+> instante de inicio del segmento (§3). Sin lote activo, el edge solo emite los campos tipo A/crudos.
+> Constantes de referencia: `firmware/oryzaflow_edge/config.h` (`CP_E/CP_F/CP_C`); el script
+> `tools/replay_model.py` reproduce estas ecuaciones fuera de línea (F6).
 
 **Conversiones de unidad dentro del edge (no salen en telemetría):**
-- Henderson usa `HR` como **fracción** (`rh/100`) y `T` en **°C**.
-- Arrhenius (`D_eff`, informativo, no se publica) usa `T` en **Kelvin** (`T+273.15`).
-- Page: `t` en **horas**; `k` y `n` deben haberse ajustado **en horas** (el backend
+- Chung–Pfost usa `HR` como **fracción** (`rh/100`, acotada a [0.01, 0.99]) y `T` en **°C**.
+- Page/Midilli: `t` en **horas**; `k` y `n` deben haberse ajustado **en horas** (el backend
   aprovisiona `k/n` consistentes con esta unidad — ver §3).
 
 ---
@@ -84,18 +102,21 @@ Tópico ThingsBoard (modo WiFi): `v1/devices/me/telemetry`.
 | `t`    | Temperatura      | num  | °C    | crudo   | 35–45      | SHT31, **con offset** aplicado. `>45` ⇒ riesgo fisuras. |
 | `rh`   | Humedad relativa | num  | %     | crudo   | 40–70      | SHT31, **con offset** aplicado. |
 | `rain` | Lluvia           | bool | —     | crudo   | false      | YL-83 digital. `true` ⇒ estado "cobertura". |
-| `me`   | Humedad equilibrio (Me) | num | % grano | deriv A | —     | Henderson; recalculado **cada ciclo**. |
-| `m`    | Humedad de grano (M(t)) | num | % grano | deriv B | 18–26→target | Modelado (Page). Solo si lote activo. |
+| `me`   | Humedad equilibrio (Me) | num | % b.h. | deriv A | —     | Chung–Pfost modificada, convertida a b.h.; recalculado **cada ciclo**. |
+| `m`    | Humedad de grano (M(t)) | num | % b.h. | deriv B | 18–26→target | Modelado (Page/Midilli por pasos) + `offsetM`. Solo si lote activo. |
 | `mr`   | Razón de humedad (MR)   | num | 0–1   | deriv B | 0–1        | `≤0.05` ⇒ proceso concluido. Solo si lote activo. |
 | `dr`   | Tasa de secado (DR)     | num | %/h   | deriv B | 0.5–2.5    | `<0.5` lento; `>2.5` riesgo. Solo si lote activo. |
 | `te`   | Tiempo restante estimado| num | h     | deriv B | —          | **Opcional pero recomendado** (app HU-curva). Solo si lote activo. |
+| `om`   | offsetM vigente         | num  | % b.h. | deriv B | 0 (campaña) | **v1.1 (F8).** Corrección manual sumada a `m`; se publica para auditar el MAE. Solo si lote activo. |
+| `seg`  | Segmento diario         | int  | —     | deriv B | 1, 2, …   | **v1.1 (F3).** Número del segmento aprovisionado (`segmento`, §3). Solo si lote activo y `segmento > 0`. |
 | `lot`  | Lote activo en el edge  | bool | —     | meta   | —          | `false` ⇒ campos tipo B ausentes (Type A only). |
 
 **Reglas de presencia:**
 - Campos **siempre presentes:** `t`, `rh`, `rain`, `me`, `lot`.
-- Campos tipo B (`m`, `mr`, `dr`, `te`) **presentes solo si `lot=true`** (hay lote
-  aprovisionado y `t_transcurrido ≥ 0`). Nunca se envían como `null`: se **omiten**.
-- `dr` se omite además en la **primera** publicación del lote (no hay `M_prev`).
+- Campos tipo B (`m`, `mr`, `dr`, `te`, `om`, `seg`) **presentes solo si `lot=true`** (hay lote
+  aprovisionado y `k, n > 0`). Nunca se envían como `null`: se **omiten**.
+- `dr` se omite además en la **primera** publicación de cada **segmento** (no hay `M_prev`; F3).
+- `seg` se omite si el backend no aprovisionó `segmento` (firmware/backend anteriores a v1.1).
 
 **Tipos:** todos los numéricos son `double`/número JSON. Sin unidades en el valor.
 
@@ -152,10 +173,15 @@ downlink en LoRaWAN). Sin esto el edge **no** puede calcular tipo B.
   "loteId": "LOTE-2026-0042",
   "loteInicioTs": 1718900000000,
   "m0": 22.5,
-  "mTarget": 13.0,
+  "mTarget": 12.0,
   "perfil": "caseritaNormal",
   "k": 0.1200,
   "n": 1.0500,
+  "modelo": "PAGE",
+  "a": 1.0,
+  "b": 0.0,
+  "segmento": 1,
+  "meModel": "chung_pfost",
   "intervaloEnvioSegundos": 300,
   "offsetT": -0.30,
   "offsetRh": 1.20,
@@ -167,20 +193,27 @@ downlink en LoRaWAN). Sin esto el edge **no** puede calcular tipo B.
 | Atributo | Tipo | Unidad | Uso en el edge |
 |---|---|---|---|
 | `loteId` | string | — | Trazabilidad; se refleja en client-attribute (§6). |
-| `loteInicioTs` | int | ms epoch UTC | Ancla para `t = (now − loteInicioTs)` en **horas**. |
-| `m0` | num | % grano | `M₀` en Page / MR_obj. |
-| `mTarget` | num | % grano | `M_target` para `MR_obj` y `te`. |
+| `loteInicioTs` | int | ms epoch UTC | **v1.1:** inicio del **segmento diario** abierto (F3), no del lote. Ancla para `t` en **horas**; al cambiar, el edge reinicia `M_prev`. |
+| `m0` | num | % b.h. | `M₀` del **segmento** (medida al descubrir; F3). Al cambiar, el edge reinicia `M_prev`. |
+| `mTarget` | num | % b.h. | `M_target` para `MR_obj` y `te`. |
 | `perfil` | string | — | Etiqueta comercial (§8 contexto); informativa. |
 | `k` | num | (1/hⁿ) | Constante Page, **ajustada en horas**. |
 | `n` | num | — | Exponente Page. |
+| `modelo` | string | `PAGE` \| `MIDILLI` | **v1.1 (F4).** Modelo de capa delgada. Default `PAGE`. |
+| `a`, `b` | num | — | **v1.1 (F4).** Constantes de Midilli `MR = a·exp(−k·tⁿ) + b·t`. Con `a=1, b=0` reproduce Page. |
+| `segmento` | int | — | **v1.1 (F3).** Número del segmento diario; se refleja en `seg`. Al cambiar, el edge reinicia `M_prev`. |
+| `meModel` | string | — | **v1.1 (F1).** Ecuación de equilibrio. Hoy solo `chung_pfost`; `henderson`/`steffe_singh` quedan `TODO(fuente)` hasta tener ASAE D245. |
 | `intervaloEnvioSegundos` | int | s | Periodo de **publicación** (§4). `Esp32Config`. |
 | `offsetT` | num | °C | Calibración SHT31 T (HU-44). `t = t_raw + offsetT`. |
 | `offsetRh` | num | % | Calibración SHT31 HR. `rh = rh_raw + offsetRh`. |
-| `offsetM` | num | % grano | Corrección del modelo `m` (def. 0). |
+| `offsetM` | num | % b.h. | Corrección del modelo `m` (def. 0). **Debe ser 0 en lotes de campaña** (F8); el backend rechaza iniciar con `offsetM ≠ 0` salvo `permitirOffsetM`. Se audita en `om`. |
 | `tMax` | num | °C | Umbral de temperatura del lote/variedad (informativo). |
 
-**Fin de lote:** al completar/cancelar, el backend empuja `{"loteId": null}` (o
-`lot=false` por RPC). El edge vuelve a modo tipo A (sigue publicando `t/rh/rain/me`).
+**Fin de lote / lote cubierto:** al completar/cancelar el lote **o al cerrar un segmento** (noche, lluvia; F3)
+el backend borra los atributos del lote (`DELETE ... SHARED_SCOPE?keys=loteId,...`, que el edge recibe como
+`{"deleted":["loteId",...]}`) o empuja `{"loteId": null}`. El edge vuelve a modo tipo A (sigue publicando
+`t/rh/rain/me`). Al abrir el segmento siguiente el backend vuelve a empujar todo con el nuevo
+`loteInicioTs`, `m0` y `segmento`.
 
 > `offsetT/offsetRh/offsetM` también pueden vivir como *shared attributes*
 > persistentes del nodo (calibración, no del lote). Mapean a
@@ -226,6 +259,9 @@ Especificación del payload para `encode()` (edge) / `decode()` (NS/ThingsBoard)
 Longitudes resultantes: **7 bytes** (sin lote) · **11 bytes** (lote, 1ª pub sin dr/te)
 · **15 bytes** (lote completo con dr y te). El `decode()` usa `flags` + longitud para
 saber qué campos vienen.
+
+> **v1.1:** las claves `om` y `seg` **no están** en el codec binario v1 (pendiente 4b, junto con el
+> gateway LoRaWAN). En modo WiFi viajan en el JSON; en LoRaWAN se añadirán como `uint8 seg` e `int16 om×100`.
 
 ### 5.2 Byte de flags (offset 0)
 
@@ -282,7 +318,7 @@ Tópico `v1/devices/me/attributes` (WiFi) / metadatos LoRaWAN.
 
 ```json
 {
-  "fwVersion": "1.0.0",
+  "fwVersion": "1.1.0",
   "transport": "wifi",
   "loteId": "LOTE-2026-0042",
   "rssi": -67,
@@ -293,7 +329,8 @@ Tópico `v1/devices/me/attributes` (WiFi) / metadatos LoRaWAN.
 ```
 
 Estos son **atributos**, no telemetría: cambian poco y se consultan por estado, no
-por serie temporal.
+por serie temporal. **Implementado en v1.1** (al conectar a MQTT): `fwVersion`, `transport`,
+`intervaloEnvioSegundos`, `ip`, `rssi`. Pendientes: `loteId`, `bootCount`.
 
 ---
 
@@ -312,6 +349,8 @@ para el suscriptor MQTT (BC4) y `SensorReadingModel`/`NodeModel` (§4 del contra
 | `mr` | — | — | `razon_humedad` |
 | `dr` | — | — | `tasa_secado` |
 | `te` | — | — | `tiempo_restante_h` |
+| `om` | — | — | `offset_m` (v1.1, auditoría F8) |
+| `seg` | — | — | `segmento` (v1.1, F3) |
 | `rain` | — | (estado "cobertura") | `lluvia` |
 | `lot` | — | `loteActivoId` (vía `loteId` attr) | — |
 
@@ -332,7 +371,6 @@ para el suscriptor MQTT (BC4) y `SensorReadingModel`/`NodeModel` (§4 del contra
 - [x] Codec binario LoRaWAN + decoder de referencia (§5).
 - [x] Mapeo a `SensorReadingModel`/`NodeModel` y columnas de `LECTURA` (§7).
 
-**Siguiente en esta sesión IoT:** (2) configurar ThingsBoard (device, credenciales
-MQTT/TLS, shared attributes, decoder LoRaWAN) y (3) firmware ESP32 (MicroPython:
-leer SHT31+YL-83, aplicar offsets, calcular Henderson+Page+DR, conmutar transporte
-WiFi/LoRaWAN, publicar este esquema).
+- [x] v1.1 (2026-09-24): `me/m` en % b.h. con Chung–Pfost; claves `om`, `seg`; atributos `segmento`,
+  `modelo`, `a`, `b`, `meModel`; integración por pasos (§1). Firmware v1.1.0 en C++/Arduino
+  (`firmware/oryzaflow_edge`, no MicroPython).
