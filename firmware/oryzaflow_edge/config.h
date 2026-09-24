@@ -26,9 +26,21 @@
 
 // ---- Constantes del modelo (CONTEXTO_PROYECTO §7) ----
 // Henderson modificado:  Me = ( -ln(1-HR) / (A*(T+C)) )^(1/B)   con HR en fracción, T en °C
+// FALLO CONOCIDO (docs/fallos_firmware.md, F1 y F2): la forma es de Henderson pero C=35.703 pertenece a la
+// familia Chung-Pfost (ASAE D245.4); A y B no tienen fuente; y la ecuación devuelve % base SECA mientras
+// m0/mTarget llegan en % base HÚMEDA. Sustituir por Chung-Pfost modificada con constantes citadas y convertir a b.h.
 #define HENDERSON_A  2.448e-5f
 #define HENDERSON_B  2.334f
 #define HENDERSON_C  35.703f
+
+// ---- Meta del lote y banda de conformidad (Protocolo de campo v1.0, 2026-09-21) ----
+// Convención: TODAS las humedades de grano (m0, mTarget, m, me, offsetM) se expresan en % base húmeda (b.h.).
+// La meta la aprovisiona el backend (mTarget). Campaña 2026: una variedad de arroz común y una meta única en el
+// rango 11-13 % b.h. (valor provisional 12.0; el encargado lo confirma con decimal en la primera visita).
+// TODO(campo): el 9 % de saco de marca queda fuera del alcance de la campaña (decisión del 22/09/2026).
+// Banda de conformidad: lote conforme si |M_final - mTarget| <= TARGET_TOLERANCE_PP. La evalúa el backend
+// (oryzaflow.drying.target-tolerance-pp); aquí se declara para que el edge y el backend compartan el valor.
+#define TARGET_TOLERANCE_PP  0.5f   // pp, por confirmar con el encargado de la planta
 
 // Escala de tiempo del modelo Page. 1.0 = tiempo real (producción).
 // Subir (p. ej. 720) SOLO para demo: acelera la curva de secado y hace visible
