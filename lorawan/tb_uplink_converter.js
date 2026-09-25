@@ -1,50 +1,32 @@
-// OryzaFlow — Data converter de UPLINK para ThingsBoard (Integrations center → Data converters → Add → Uplink).
+// OryzaFlow — Data converter de UPLINK para ThingsBoard (Integrations center → Data converters → Add → Uplink, JS).
 // Integración "The Things Stack" (camino B): TB recibe el JSON de TTS y este converter lo traduce a
 // { deviceName, deviceType, telemetry, attributes }. El deviceName debe coincidir con el device ya existente en TB
 // (oryzaflow-edge-01 = Node.serialEsp32 del backend), así la Rule Chain actual lo reenvía a HiveMQ sin cambios.
 // Usa decoded_payload si TTS tiene cargado el formatter de uplink; si no, decodifica frm_payload (base64) aquí mismo.
+// Nota: ThingsBoard envuelve este código en function decoder(payload, metadata) { ... }; por eso las funciones
+// auxiliares van primero y hay un único return al final.
 
-var data = decodeToJson(payload);
+var base64Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
-var deviceName = (data.end_device_ids && data.end_device_ids.device_id) || 'oryzaflow-edge-01';
-var up = data.uplink_message || {};
-var telemetry = null;
-
-if (up.decoded_payload && up.decoded_payload.t !== undefined) {
-    telemetry = up.decoded_payload;
-} else if (up.frm_payload) {
-    telemetry = decodeBytes(base64ToBytesArray(up.frm_payload));
-}
-
-var ts = data.received_at ? Date.parse(data.received_at) : Date.now();
-var rx = (up.rx_metadata && up.rx_metadata[0]) || {};
-
-var result = {
-    deviceName: deviceName,
-    deviceType: 'oryzaflow-edge',
-    attributes: {
-        transport: 'lorawan',
-        gatewayId: rx.gateway_ids ? rx.gateway_ids.gateway_id : undefined,
-        fPort: up.f_port,
-        fCnt: up.f_cnt
-    },
-    telemetry: []
+var base64ToBytesArray = function (s) {
+    var out = [], bits = 0, acc = 0;
+    for (var i = 0; i < s.length; i++) {
+        var c = base64Chars.indexOf(s.charAt(i));
+        if (c < 0) continue;
+        acc = ((acc << 6) | c) & 0xffffff;
+        bits += 6;
+        if (bits >= 8) { bits -= 8; out.push((acc >> bits) & 0xff); }
+    }
+    return out;
 };
-if (telemetry) {
-    var values = {};
-    for (var k in telemetry) values[k] = telemetry[k];
-    if (rx.rssi !== undefined) values.rssi = rx.rssi;
-    if (rx.snr !== undefined) values.snr = rx.snr;
-    result.telemetry.push({ ts: ts, values: values });
-}
-return result;
 
-// ---- helpers (mismo codec v1.1 que lorawan/ttn_uplink_formatter.js) ----
-function decodeBytes(b) {
+// Mismo codec v1.1 que lorawan/ttn_uplink_formatter.js (ESQUEMA_TELEMETRIA.md §5).
+var decodeBytes = function (b) {
     if (!b || b.length < 7) return null;
-    function u16(i) { return (b[i] << 8) | b[i + 1]; }
-    function s16(i) { var v = u16(i); return v >= 0x8000 ? v - 0x10000 : v; }
-    var flags = b[0], lot = (flags & 0x01) !== 0;
+    var u16 = function (i) { return (b[i] << 8) | b[i + 1]; };
+    var s16 = function (i) { var v = u16(i); return v >= 0x8000 ? v - 0x10000 : v; };
+    var flags = b[0];
+    var lot = (flags & 0x01) !== 0;
     var d = { t: s16(1) / 100, rh: u16(3) / 100, rain: (flags & 0x02) !== 0, me: u16(5) / 100, lot: lot };
     if (flags & 0x10) d.fault = true;
     var o = 7;
@@ -57,16 +39,42 @@ function decodeBytes(b) {
         if (flags & 0x40) { d.om = s16(o) / 100; o += 2; }
     }
     return d;
+};
+
+var data = decodeToJson(payload);
+
+var deviceName = 'oryzaflow-edge-01';
+if (data.end_device_ids && data.end_device_ids.device_id) deviceName = data.end_device_ids.device_id;
+var up = data.uplink_message || {};
+var telemetry = null;
+if (up.decoded_payload && up.decoded_payload.t !== undefined) {
+    telemetry = up.decoded_payload;
+} else if (up.frm_payload) {
+    telemetry = decodeBytes(base64ToBytesArray(up.frm_payload));
 }
 
-function base64ToBytesArray(s) {
-    var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    var out = [], bits = 0, acc = 0;
-    for (var i = 0; i < s.length; i++) {
-        var c = chars.indexOf(s.charAt(i));
-        if (c < 0) continue;
-        acc = (acc << 6) | c; bits += 6;
-        if (bits >= 8) { bits -= 8; out.push((acc >> bits) & 0xff); }
-    }
-    return out;
+var ts = data.received_at ? Date.parse(data.received_at) : Date.now();
+var rx = {};
+if (up.rx_metadata && up.rx_metadata.length > 0) rx = up.rx_metadata[0];
+
+var attributes = { transport: 'lorawan' };
+if (rx.gateway_ids && rx.gateway_ids.gateway_id) attributes.gatewayId = rx.gateway_ids.gateway_id;
+if (up.f_port !== undefined) attributes.fPort = up.f_port;
+if (up.f_cnt !== undefined) attributes.fCnt = up.f_cnt;
+
+var telemetryList = [];
+if (telemetry) {
+    var values = {};
+    for (var k in telemetry) values[k] = telemetry[k];
+    if (rx.rssi !== undefined) values.rssi = rx.rssi;
+    if (rx.snr !== undefined) values.snr = rx.snr;
+    telemetryList.push({ ts: ts, values: values });
 }
+
+var result = {
+    deviceName: deviceName,
+    deviceType: 'oryzaflow-edge',
+    attributes: attributes,
+    telemetry: telemetryList
+};
+return result;
