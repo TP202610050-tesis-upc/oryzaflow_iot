@@ -54,6 +54,9 @@ void lorawanBegin() {
 }
 
 bool lorawanJoined() {
+  // Bandera propia: se activa cuando la pila pasa a DEVICE_STATE_SEND tras el JoinAccept (MlmeConfirm OK).
+  // El MIB_NETWORK_JOINED de esta pila puede responder "unido" mientras el join sigue en curso.
+  if (!s_joinedSeen) return false;
   MibRequestConfirm_t mib;
   mib.Type = MIB_NETWORK_JOINED;
   if (LoRaMacMibGetRequestConfirm(&mib) != LORAMAC_STATUS_OK) return false;

@@ -37,6 +37,7 @@
 #define LORAWAN_CHANNEL_MASK       { 0xFF00, 0x0000, 0x0000, 0x0000, 0x0002, 0x0000 }
 #define LORAWAN_TX_BUSY_MS         12000UL  // TX + RX1 (5 s en TTS) + RX2 (6 s) + margen: sin trabajo pesado
 #define LORAWAN_REJOIN_DELAY_MS    30000UL
+#define LORAWAN_RETRY_MS           15000UL  // reintento de un uplink que la pila rechazo (p. ej. join en curso)
 #define LORAWAN_TIME_REQ_INTERVAL_MS (12UL * 3600UL * 1000UL)   // DeviceTimeReq cada 12 h (deriva de millis)
 
 // ---- Frecuencia (ver §4 del esquema) ----

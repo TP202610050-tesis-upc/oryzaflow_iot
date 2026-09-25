@@ -224,6 +224,7 @@ void loop() {
   bool pub = lorawanSend(bin, n);
   Serial.printf("[lora] uplink %u B publish=%s estado=%s tx=%lu rx=%lu\n", (unsigned)n, pub ? "ok" : "NO",
                 lorawanStatus(), (unsigned long)lorawanTxCount(), (unsigned long)lorawanRxCount());
+  if (!pub) g_lastPublish = now - g_publishMs + LORAWAN_RETRY_MS;   // reintento pronto en vez de esperar un ciclo entero
 #else
   bool pub = netPublish(json);
   Serial.printf("[mqtt] publish=%s estado=%s\n", pub ? "ok" : "NO", netStatus());
