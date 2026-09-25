@@ -41,7 +41,21 @@ var decodeBytes = function (b) {
     return d;
 };
 
-var data = decodeToJson(payload);
+// payload llega como arreglo de bytes (o ya como texto/objeto según la versión de TB). Se evita decodeToJson()
+// porque el validador del editor de thingsboard.cloud no lo reconoce y deshabilita el botón Test.
+var parsePayload = function (p) {
+    if (p === null || p === undefined) return {};
+    if (typeof p === 'string') return JSON.parse(p);
+    if (typeof p === 'object' && p.length === undefined) return p;   // ya es un objeto JSON
+    var pct = '';
+    for (var i = 0; i < p.length; i++) pct += '%' + ('0' + (p[i] & 0xff).toString(16)).slice(-2);
+    var text;
+    try { text = decodeURIComponent(pct); }                            // UTF-8 correcto
+    catch (e) { text = ''; for (var j = 0; j < p.length; j++) text += String.fromCharCode(p[j] & 0xff); }
+    return JSON.parse(text);
+};
+
+var data = parsePayload(payload);
 
 var deviceName = 'oryzaflow-edge-01';
 if (data.end_device_ids && data.end_device_ids.device_id) deviceName = data.end_device_ids.device_id;
