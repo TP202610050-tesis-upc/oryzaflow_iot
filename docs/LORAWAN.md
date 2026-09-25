@@ -91,9 +91,24 @@ de TB; la integración hace la traducción en ambos sentidos. `deviceName` = `or
 4. **Rule chains → Root** (la que reenvía *Post telemetry* a HiveMQ): añadir al *Message Type Switch* las salidas
    **Attributes Updated** y **Attributes Deleted** → nodo **integration downlink** (integración The Things Stack).
    Así `ProvisioningService.provision()` (escribe shared attributes) genera un `SET_LOT` y `clear()` (borra claves)
-   un `CLEAR_LOT`, sin tocar el backend.
+   un `CLEAR_LOT`, sin tocar el backend. *(Hecho el 25/09/2026 por la API REST de TB: nodo
+   `to TTS (downlink aprovisionamiento)`, tipo `TbIntegrationDownlinkNode`.)*
 
-### 5.3 Prueba
+   **Lecciones de la puesta en marcha (25/09/2026):**
+   - El tópico de downlink de la integración es `v3/oryzaflow@oryzaflow/devices/${devId}/down/push` (no editable):
+     el converter de downlink **debe devolver `devId` en `metadata`**; sin él la integración descarta el mensaje en
+     silencio. `tb_downlink_converter.js` ya lo incluye.
+   - La depuración de la integración se activa por 15 min (botón "15 min"); vencida, solo se registran fallos. Para
+     ver los eventos *Downlink* hay que reactivarla antes de probar.
+   - Con `down/push`, cada `Attributes Updated` encola un downlink; TTS los entrega de uno en uno (uno por uplink).
+     El nodo ignora repeticiones sin cambios de lote/segmento/m0.
+
+### 5.3 Prueba (ejecutada el 25/09/2026 con LOTE-3 de prueba en RDS)
+- 18:12:34 `POST /batches/3/start` → shared attributes en TB → rule chain → integración → TTS (`down/push`, 23 B).
+- 18:18:24 uplink del nodo (7 B, `lot=false`) → 18:18:29 RX1: `[prov] SET_LOT lote=3 seg=1 m0=22.00 mTarget=12.00`
+  (RSSI −42, SNR 11) → `[prov] lote/segmento cambiado (gen=1)`.
+- Subida verificada antes: nodo → TTS → TB (`t/rh/me/lot/rssi/snr`) → HiveMQ (`oryzaflow/telemetry/oryzaflow-edge-01`)
+  → backend local contra RDS (`sensor_readings`, nodo `Edge Real` ACTIVO).
 - `POST /api/v1/batches/{id}/start` en el backend → TB shared attributes → downlink `SET_LOT` → en el serial del nodo
   `[prov] SET_LOT …` (tras su siguiente uplink, ≤ 5 min) → siguiente uplink con `lot=true`, `m≈m0`, `seg=1`.
 - `segments/close {NOCHE}` → `CLEAR_LOT` → `lot=false`. `POST /segments {m0}` → `SET_LOT` con `segmento=2`.

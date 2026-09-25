@@ -90,6 +90,7 @@ if (cmd !== null) {
         contentType: 'JSON',
         data: JSON.stringify(body),
         metadata: {
+            devId: deviceName,          // la integración TTS de TB sustituye ${devId} en el tópico de downlink
             deviceName: deviceName,
             cmd: cmd,
             // MQTT de TTS: v3/{application}@{tenant}/devices/{device}/down/replace (replace = solo queda el último)
