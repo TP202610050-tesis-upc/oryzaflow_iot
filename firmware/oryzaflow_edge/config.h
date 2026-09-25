@@ -20,9 +20,28 @@
 #define DEFAULT_OFFSET_RH  0.0f   // %
 #define DEFAULT_OFFSET_M   0.0f   // % grano (corrección del modelo)
 
+// ---- Transporte (ESQUEMA §0): el JSON canónico es el contrato; el medio físico se conmuta aquí ----
+//   TRANSPORT_WIFI    : JSON por MQTT a ThingsBoard (Etapa 3); aprovisionamiento por shared attributes; hora por NTP.
+//   TRANSPORT_LORAWAN : payload binario (codec.h) por LoRaWAN OTAA clase A a The Things Stack (Etapa 4b/4c);
+//                       aprovisionamiento por downlink binario (§5.4); hora por DeviceTimeReq / TIME_HINT.
+#define TRANSPORT_WIFI     0
+#define TRANSPORT_LORAWAN  1
+#define TRANSPORT_MODE     TRANSPORT_LORAWAN
+
+// ---- LoRaWAN (compilar con el menú de placa LORAWAN_REGION = REGION_AU915; FQBN ...:LORAWAN_REGION=4) ----
+#define LORAWAN_UPLINK_PORT        1        // fPort de la telemetría (uplink)
+#define LORAWAN_DOWNLINK_PORT      10       // fPort del aprovisionamiento (downlink)
+#define LORAWAN_ADR                true     // la red ajusta DR/potencia
+#define LORAWAN_DEFAULT_DR         3        // AU915 DR3 = SF9/125 kHz: 53 B de carga (el uplink v1.1 usa <= 18 B)
+// Sub-banda 2 de AU915 (la que usa The Things Stack): canales 8-15 (916.8-917.9 MHz) + canal 65 (500 kHz).
+#define LORAWAN_CHANNEL_MASK       { 0xFF00, 0x0000, 0x0000, 0x0000, 0x0002, 0x0000 }
+#define LORAWAN_TX_BUSY_MS         12000UL  // TX + RX1 (5 s en TTS) + RX2 (6 s) + margen: sin trabajo pesado
+#define LORAWAN_REJOIN_DELAY_MS    30000UL
+#define LORAWAN_TIME_REQ_INTERVAL_MS (12UL * 3600UL * 1000UL)   // DeviceTimeReq cada 12 h (deriva de millis)
+
 // ---- Frecuencia (ver §4 del esquema) ----
 #define SAMPLE_INTERVAL_MS   60000UL  // muestreo de sensores (suaviza ruido)
-#define PUBLISH_INTERVAL_S   150      // publicación de telemetría 2.5 min (configurable por atributo)
+#define PUBLISH_INTERVAL_S   300      // publicación de telemetría 5 min (§4; configurable por atributo/downlink)
 
 // ---- Constantes del modelo (CONTEXTO_PROYECTO §7; docs/fallos_firmware.md F1/F2) ----
 // Humedad de equilibrio: Chung-Pfost modificada para arroz cascara (forma ASAE D245.4):
@@ -66,7 +85,7 @@
 #define TB_SHARED_KEYS  "loteId,loteInicioTs,m0,mTarget,perfil,k,n,modelo,a,b,segmento,meModel,intervaloEnvioSegundos,offsetT,offsetRh,offsetM,tMax"
 
 // ---- Version de firmware (client attribute fwVersion, ESQUEMA §6; docs/equivalencia_nodo_offline.md) ----
-#define FW_VERSION  "1.1.0"
+#define FW_VERSION  "1.2.0"
 
 // ---- Serial ----
 #define SERIAL_BAUD  115200

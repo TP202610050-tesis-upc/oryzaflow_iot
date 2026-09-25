@@ -1,22 +1,28 @@
 // ============================================================================
 // OryzaFlow edge — firmware (Heltec WiFi LoRa 32 V3 / ESP32-S3)
-// Sensores -> modelo de secado -> JSON canónico -> ThingsBoard (WiFi/MQTT).
-// ETAPA 4a: el lote lo aprovisiona el backend por shared attributes (sin hardcode).
-// v1.1.0 (docs/fallos_firmware.md): Chung-Pfost en base húmeda (F1/F2), integración
-// por pasos con Me variable (F10), estado por segmento diario (F3), om/seg (F8/F3), Midilli (F4).
-// Esquema: oryzaflow_iot/docs/ESQUEMA_TELEMETRIA.md
+// Sensores -> modelo de secado -> JSON canónico -> transporte (WiFi/MQTT a ThingsBoard, o LoRaWAN a TTS).
+// v1.1.0 (docs/fallos_firmware.md): Chung-Pfost en base húmeda (F1/F2), integración por pasos con
+//   Me variable (F10), estado por segmento diario (F3), om/seg (F8/F3), Midilli (F4).
+// v1.2.0 (Etapa 4b/4c): transporte LoRaWAN OTAA clase A (config.h TRANSPORT_MODE), codec binario v1.1,
+//   aprovisionamiento por downlink, hora por DeviceTimeReq. El JSON canónico sigue siendo el contrato.
+// Esquema: oryzaflow_iot/docs/ESQUEMA_TELEMETRIA.md · Puesta en marcha LoRaWAN: oryzaflow_iot/docs/LORAWAN.md
 // ============================================================================
 #include "config.h"
 #include "sht31.h"
 #include "drying_model.h"
 #include "telemetry.h"
 #include "display_oled.h"
-#include "net_thingsboard.h"
 #include "provisioning.h"
+#if TRANSPORT_MODE == TRANSPORT_LORAWAN
+  #include "net_lorawan.h"
+  #include "codec.h"
+#else
+  #include "net_thingsboard.h"
+#endif
 
 static Sht31 sht(Wire1, SHT31_I2C_ADDR);
 
-// Parámetros del lote/segmento: los aprovisiona el backend por shared attributes (Etapa 4a).
+// Parámetros del lote/segmento: los aprovisiona el backend (shared attributes o downlink).
 // Arranca INACTIVO -> el edge publica solo tipo A hasta que llegue un lote.
 static LotParams g_lot;
 
@@ -112,20 +118,49 @@ static void selfTestModel() {
                 okD ? "PASS" : "FAIL", d.m, d.te, b.m, b.te);
   if (!okD) fails++;
 
+#if TRANSPORT_MODE == TRANSPORT_LORAWAN
+  // (e) Codec binario v1.1: el payload del caso (c) @5h ocupa 18 B y decodifica a los mismos valores.
+  uint8_t bin[TELEMETRY_CODEC_MAX_BYTES];
+  size_t n = encodeTelemetry(b, bin, sizeof(bin));
+  Serial.print("      codec @5h: ");
+  for (size_t i = 0; i < n; i++) Serial.printf("%02X", bin[i]);
+  bool okE = (n == 18) && bin[0] == (0x01 | 0x04 | 0x08 | 0x20 | 0x40)
+          && ((bin[1] << 8) | bin[2]) == 4200 && ((bin[5] << 8) | bin[6]) == 942 && ((bin[7] << 8) | bin[8]) == 1599;
+  Serial.printf(" (%u B)\n  [%s] (e) codec: flags=0x%02X t=42.00 me=9.42 m=15.99 seg=1 om=0.00\n", (unsigned)n, okE ? "PASS" : "FAIL", bin[0]);
+  if (!okE) fails++;
+#endif
+
   Serial.printf("--- fin self-test: %s (%d fallos) ---\n", fails == 0 ? "PASS" : "FAIL", fails);
 }
 
-// Consume el aprovisionamiento del backend (shared attributes de ThingsBoard, Etapa 4a):
-// llena el lote/segmento y los offsets/cadencia vigentes.
+// ---------------------------------------------------------------------------
+// Aprovisionamiento (llena el lote/segmento y los offsets/cadencia vigentes)
+// ---------------------------------------------------------------------------
+#if TRANSPORT_MODE == TRANSPORT_LORAWAN
+static void onDownlink(uint8_t port, const uint8_t* data, size_t len) {
+  applyDownlink(port, data, len, g_lot, g_offsetT, g_offsetRH, g_publishMs);
+}
+static void onNetworkTime(uint32_t epochSeconds) {
+  clockSetEpochSeconds(epochSeconds);
+  provisioningOnClockSync(g_lot);
+}
+#else
 static void onAttributes(const char* json, unsigned int len) {
   applyAttributes(json, len, g_lot, g_offsetT, g_offsetRH, g_publishMs);
   netSetPublishIntervalS(g_publishMs / 1000UL);
 }
+#endif
 
 void setup() {
   Serial.begin(SERIAL_BAUD);
   delay(400);
   Serial.println("\n=== OryzaFlow edge v" FW_VERSION " ===");
+#if TRANSPORT_MODE == TRANSPORT_LORAWAN
+  Serial.println("[transporte] LoRaWAN (OTAA clase A, The Things Stack)");
+  lorawanBegin();              // Mcu.begin de Heltec ANTES del OLED (inicializa SPI/radio/temporizadores)
+#else
+  Serial.println("[transporte] WiFi/MQTT (ThingsBoard)");
+#endif
 
   pinMode(PIN_RAIN_DO, INPUT);
   analogReadResolution(12);
@@ -138,17 +173,28 @@ void setup() {
 
   selfTestModel();
 
+#if TRANSPORT_MODE == TRANSPORT_LORAWAN
+  lorawanSetDownlinkHandler(onDownlink);
+  lorawanSetTimeHandler(onNetworkTime);
+#else
   // ETAPA 4a: sin lote hardcodeado. El lote llega por aprovisionamiento (shared attributes).
   netSetAttributeHandler(onAttributes);
   netBegin();                  // conecta WiFi (MQTT se conecta en el loop)
   provisioningSyncTime(8000);  // NTP antes del 1er MQTT connect -> mapea loteInicioTs a t real
+#endif
 }
 
 void loop() {
+#if TRANSPORT_MODE == TRANSPORT_LORAWAN
+  lorawanLoop();                                   // temporizadores + IRQ de la radio (sin deep sleep)
+  if (!lorawanJoined() || lorawanTxBusy()) { delay(2); return; }
+  uint32_t now = millis();
+  if (!g_firstPublish && (now - g_lastPublish < g_publishMs)) { delay(2); return; }
+#else
   netLoop();  // mantiene WiFi/MQTT vivos (no bloqueante)
-
   uint32_t now = millis();
   if (!g_firstPublish && (now - g_lastPublish < g_publishMs)) { delay(20); return; }
+#endif
   g_firstPublish = false;
   g_lastPublish = now;
 
@@ -168,11 +214,19 @@ void loop() {
   DryingState st = computeDryingState(g_lot, t, rh, rain, (double)now, g_model);
 
   char json[256];
-  buildTelemetryJson(json, sizeof(json), st, 0);  // sin ts: ThingsBoard sella
+  buildTelemetryJson(json, sizeof(json), st, 0);  // JSON canónico (contrato); en LoRaWAN solo va al serial
   Serial.println(json);
 
+#if TRANSPORT_MODE == TRANSPORT_LORAWAN
+  uint8_t bin[TELEMETRY_CODEC_MAX_BYTES];
+  size_t  n = encodeTelemetry(st, bin, sizeof(bin));
+  displayRender(st, lorawanStatus());              // OLED antes del TX: durante las ventanas RX no se toca el I2C
+  bool pub = lorawanSend(bin, n);
+  Serial.printf("[lora] uplink %u B publish=%s estado=%s tx=%lu rx=%lu\n", (unsigned)n, pub ? "ok" : "NO",
+                lorawanStatus(), (unsigned long)lorawanTxCount(), (unsigned long)lorawanRxCount());
+#else
   bool pub = netPublish(json);
   Serial.printf("[mqtt] publish=%s estado=%s\n", pub ? "ok" : "NO", netStatus());
-
   displayRender(st, netStatus());
+#endif
 }

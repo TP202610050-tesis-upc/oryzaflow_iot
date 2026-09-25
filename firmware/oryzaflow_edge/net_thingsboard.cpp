@@ -1,6 +1,7 @@
 #include "net_thingsboard.h"
-#include "secrets.h"
 #include "config.h"
+#if TRANSPORT_MODE == TRANSPORT_WIFI   // modulo compilado solo en modo WiFi (ver net_lorawan.cpp para LoRaWAN)
+#include "secrets.h"
 #include <WiFi.h>
 #include <PubSubClient.h>
 
@@ -102,3 +103,5 @@ bool netPublish(const char* json) {
 }
 
 const char* netStatus() { return statusBuf; }
+
+#endif  // TRANSPORT_MODE == TRANSPORT_WIFI

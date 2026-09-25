@@ -1,5 +1,5 @@
 #pragma once
-// Transporte WiFi -> MQTT a ThingsBoard (Etapa 3).
+// Transporte WiFi -> MQTT a ThingsBoard (Etapa 3). Solo se compila con TRANSPORT_MODE == TRANSPORT_WIFI.
 // Publica el JSON canónico en v1/devices/me/telemetry.
 // Credenciales en secrets.h. Reconexión no bloqueante con backoff.
 #include <Arduino.h>

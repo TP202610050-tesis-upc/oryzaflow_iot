@@ -40,9 +40,8 @@ mediante un **interruptor de transporte** en el firmware:
 - El `encode()` (edge) y el `decode()` (NS/ThingsBoard) son **inversos exactos** y
   comparten la especificación binaria de §5. Probarlos como par es obligatorio
   (round-trip: `decode(encode(x)) == x` dentro de la resolución de cuantización).
-- Modo de transporte por defecto en prototipo de tesis: **WIFI** (más simple,
-  coherente con `Esp32ConfigModel.ssid/ipAddress/puerto/wifiActivo`). **LORAWAN**
-  queda listo como ruta de producción (respeta duty cycle, §4).
+- Modo de transporte: `config.h` → `TRANSPORT_MODE` (**LORAWAN** desde el 2026-09-24, firmware v1.2.0: gateway
+  Heltec HT-M7603 + The Things Stack Cloud, ver `docs/LORAWAN.md`; **WIFI** sigue disponible para banco de pruebas).
 
 ---
 
@@ -255,13 +254,16 @@ Especificación del payload para `encode()` (edge) / `decode()` (NS/ThingsBoard)
 | 9–10 | `mr` | uint16 | `round(mr × 10000)`| solo si `lot` |
 | 11–12 | `dr` | int16 | `round(dr × 100)`  | solo si `lot` y existe `M_prev` |
 | 13–14 | `te` | uint16 | `round(te × 100)`  | solo si `lot` y `te` presente |
+| 15 | `seg` | uint8 | número de segmento | **v1.1** solo si `lot` y `hasSeg` |
+| 16–17 | `om` | int16 | `round(om × 100)` | **v1.1** solo si `lot` y `hasOm` |
 
-Longitudes resultantes: **7 bytes** (sin lote) · **11 bytes** (lote, 1ª pub sin dr/te)
-· **15 bytes** (lote completo con dr y te). El `decode()` usa `flags` + longitud para
-saber qué campos vienen.
+Longitudes resultantes: **7 bytes** (sin lote) · **16 bytes** (lote, 1ª pub del segmento: sin dr)
+· **18 bytes** (lote completo con dr, te, seg y om). Los offsets de la tabla son los de la trama completa;
+cuando un campo opcional falta, los siguientes se desplazan (el `decode()` usa `flags` para saberlo).
 
-> **v1.1:** las claves `om` y `seg` **no están** en el codec binario v1 (pendiente 4b, junto con el
-> gateway LoRaWAN). En modo WiFi viajan en el JSON; en LoRaWAN se añadirán como `uint8 seg` e `int16 om×100`.
+> **v1.1 (2026-09-24, firmware v1.2.0):** codec implementado en `firmware/oryzaflow_edge/codec.cpp`
+> (`encodeTelemetry`), con `seg` y `om` incorporados. Uplink en **fPort 1**. Con lote y ADR en AU915 DR3 (SF9)
+> caben 53 B, sobra margen.
 
 ### 5.2 Byte de flags (offset 0)
 
@@ -272,42 +274,61 @@ saber qué campos vienen.
 | 2 | `hasDr`   | 1 = `dr` presente en payload. |
 | 3 | `hasTe`   | 1 = `te` presente en payload. |
 | 4 | `fault`   | 1 = fallo lectura SHT31 (`t`/`rh` no fiables). |
-| 5–7 | reservado | 0. |
+| 5 | `hasSeg`  | **v1.1** 1 = `seg` presente (número de segmento diario, F3). |
+| 6 | `hasOm`   | **v1.1** 1 = `om` presente (offsetM vigente, F8). |
+| 7 | reservado | 0. |
 
-### 5.3 Decoder de referencia (JavaScript — TTN/ChirpStack/ThingsBoard)
+### 5.3 Decoder de referencia — payload formatter de The Things Stack
+
+El decoder canónico vive en **`lorawan/ttn_uplink_formatter.js`** (función `decodeUplink(input)` para la consola
+de The Things Stack: *Applications → oryzaflow → Payload formatters → Uplink → Custom Javascript*). Reconstruye el
+JSON de §2 con las mismas claves cortas:
 
 ```javascript
-// decode(bytes) -> JSON canónico (§2). bytes: Array<int> | Buffer (big-endian)
-function decode(bytes) {
-  const u16 = (i) => (bytes[i] << 8) | bytes[i + 1];
-  const s16 = (i) => { const v = u16(i); return v >= 0x8000 ? v - 0x10000 : v; };
-
-  const flags = bytes[0];
-  const lot   = !!(flags & 0x01);
-  const out = {
-    t:    s16(1) / 100,
-    rh:   u16(3) / 100,
-    rain: !!(flags & 0x02),
-    me:   u16(5) / 100,
-    lot:  lot,
-  };
-  if (flags & 0x10) out.fault = true;
-
-  let off = 7;
+function decodeUplink(input) {
+  var b = input.bytes;
+  function u16(i) { return (b[i] << 8) | b[i + 1]; }
+  function s16(i) { var v = u16(i); return v >= 0x8000 ? v - 0x10000 : v; }
+  var flags = b[0], lot = (flags & 0x01) !== 0;
+  var d = { t: s16(1) / 100, rh: u16(3) / 100, rain: (flags & 0x02) !== 0, me: u16(5) / 100, lot: lot };
+  if (flags & 0x10) d.fault = true;
+  var o = 7;
   if (lot) {
-    out.m  = u16(off) / 100;  off += 2;
-    out.mr = u16(off) / 10000; off += 2;
-    if (flags & 0x04) { out.dr = s16(off) / 100; off += 2; }   // hasDr
-    if (flags & 0x08) { out.te = u16(off) / 100; off += 2; }   // hasTe
+    d.m = u16(o) / 100; o += 2;
+    d.mr = u16(o) / 10000; o += 2;
+    if (flags & 0x04) { d.dr = s16(o) / 100; o += 2; }   // hasDr
+    if (flags & 0x08) { d.te = u16(o) / 100; o += 2; }   // hasTe
+    if (flags & 0x20) { d.seg = b[o]; o += 1; }          // hasSeg (v1.1)
+    if (flags & 0x40) { d.om = s16(o) / 100; o += 2; }   // hasOm  (v1.1)
   }
-  return out;
+  return { data: d };
 }
 ```
 
-> El `encode()` del firmware (MicroPython, `struct.pack('>...')`) es el inverso byte
-> a byte de esto. La cuantización (×100 / ×10000) define la resolución: 0.01 en
+> El `encode()` del firmware (`codec.cpp`, C++) es el inverso byte a byte de esto; el auto-test del
+> firmware (caso (e)) comprueba la trama de 18 B del lote de referencia. La cuantización (×100 / ×10000) define la resolución: 0.01 en
 > `t/rh/me/m/dr/te` y 0.0001 en `mr` — muy por encima de la precisión de los sensores
 > y del modelo, así que el round-trip no pierde información útil.
+
+### 5.4 Downlink de aprovisionamiento (modo LoRaWAN, fPort 10) — v1.1
+
+En LoRaWAN los *shared attributes* de §3 no existen: el backend (o ThingsBoard vía su integración) encola un
+downlink binario que el nodo interpreta en `provisioning.cpp` (`applyDownlink`). Encoder/decoder de referencia:
+**`lorawan/ttn_downlink_formatter.js`** (permite encolar JSON `decoded_payload` desde la API o la consola de TTS).
+Big-endian; primer byte = comando.
+
+| cmd | Bytes | Campos (offset desde 1) | Equivale a (§3) |
+|---|---|---|---|
+| `SET_LOT` 0x01 | 23 | `inicioTs` u32 epoch s · `m0` u16×100 · `mTarget` u16×100 · `k` u16×10000 · `n` u16×1000 · `modelo` u8 (0 PAGE / 1 MIDILLI) · `a` u16×1000 · `b` i16×10000 · `offsetM` i16×100 · `segmento` u8 · `lotId` u16 | `loteId, loteInicioTs, m0, mTarget, k, n, modelo, a, b, offsetM, segmento` |
+| `CLEAR_LOT` 0x02 | 1 | — | `{"loteId": null}` / borrado de claves |
+| `SET_NODE` 0x03 | 7 | `offsetT` i16×100 · `offsetRh` i16×100 · `intervaloEnvioSegundos` u16 | `offsetT, offsetRh, intervaloEnvioSegundos` |
+| `TIME_HINT` 0x04 | 5 | `epoch` u32 | — (respaldo de hora si la red no responde `DeviceTimeReq`) |
+
+**Hora del nodo en LoRaWAN.** Sin WiFi no hay NTP: el nodo pide `DeviceTimeReq` (MAC) en el primer uplink tras
+el join y cada 12 h; The Things Stack lo responde si el dispositivo está registrado como LoRaWAN **≥ 1.0.3**.
+Con hora válida, `inicioTs` se ancla igual que `loteInicioTs` en WiFi; sin hora, `t=0` = instante de recepción
+del `SET_LOT` (o se re-ancla cuando llega la hora). Los downlinks clase A se entregan tras el siguiente uplink
+(≤ un periodo de publicación).
 
 ---
 
