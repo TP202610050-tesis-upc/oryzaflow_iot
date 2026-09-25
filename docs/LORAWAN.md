@@ -1,8 +1,10 @@
 # OryzaFlow — Transporte LoRaWAN (Etapa 4b/4c)
 
-> Estado 2026-09-24: firmware v1.2.0 con `TRANSPORT_MODE = TRANSPORT_LORAWAN`. Gateway HT-M7603 registrado y
-> conectado a The Things Stack Cloud (tenant `oryzaflow`, clúster `nam1`). Nodo `oryzaflow-edge-01` registrado (OTAA).
-> Camino de datos TTS → backend: **pendiente de decidir** (§5).
+> Estado 2026-09-24 19:45: firmware v1.2.0 con `TRANSPORT_MODE = TRANSPORT_LORAWAN` **verificado en radio**:
+> join OTAA OK, uplink de 7 B, `DeviceTimeReq` respondido (epoch 1790298343), downlink RSSI −79 / SNR 9 con el
+> gateway HT-M7603 conectado a The Things Stack Cloud (tenant `oryzaflow`, `nam1`). Camino de datos elegido:
+> **B — TTS → integración The Things Stack de ThingsBoard → Rule Chain actual → HiveMQ → backend** (§5).
+> Licencia Heltec del chip A453759E9EF0 en `secrets.h` (`HELTEC_LICENSE`).
 
 ## 1. Red
 
@@ -64,14 +66,39 @@ o *Bytes* (`02` = CLEAR_LOT). Los downlinks clase A se entregan tras el siguient
    en el serial `[prov] SET_LOT …` y el siguiente uplink lleva `lot=true`, `m≈22`, `seg=1`, `om=0`.
 4. `{"cmd":"CLEAR_LOT"}` → siguiente uplink `lot=false`.
 
-## 5. Pendiente: camino de datos TTS → backend y backend → nodo
+## 5. Camino de datos B: TTS → ThingsBoard → HiveMQ → backend (y shared attributes → downlink)
 
-- **A. Puente propio** (`bridge/`): suscriptor MQTT de TTS (`mqtt://nam1.cloud.thethings.industries:1883`,
-  usuario `oryzaflow@ttn` / API key, tópico `v3/oryzaflow@ttn/devices/+/up`) que publica el `decoded_payload` en HiveMQ
-  `oryzaflow/telemetry/<deviceName>` → el backend ingiere sin cambios. Aprovisionamiento: el backend llama a la API
-  de downlinks de TTS (`POST /api/v3/as/applications/oryzaflow/devices/oryzaflow-edge-01/down/replace` con
-  `decoded_payload` SET_LOT/CLEAR_LOT) en lugar de escribir shared attributes en ThingsBoard.
-- **B. Integración TTN de ThingsBoard** (requiere que el plan de thingsboard.cloud tenga *Integrations*): conserva
-  la cadena actual (TB → HiveMQ → backend) y los shared attributes, que TB traduce a downlinks con un conversor.
+El plan de thingsboard.cloud del proyecto permite **1 integración y 3 converters** (suficiente). El backend no
+cambia: sigue ingiriendo de HiveMQ `oryzaflow/telemetry/<deviceName>` y sigue aprovisionando por shared attributes
+de TB; la integración hace la traducción en ambos sentidos. `deviceName` = `oryzaflow-edge-01` (= `Node.serialEsp32`).
 
-El `deviceName` que el backend usa para resolver el nodo es `oryzaflow-edge-01` (= `Node.serialEsp32`).
+### 5.1 En The Things Stack (consola → Applications → oryzaflow)
+1. **Payload formatters → Uplink**: *Custom Javascript formatter*, pegar `lorawan/ttn_uplink_formatter.js`. (Opcional
+   pero útil: la consola muestra el JSON decodificado.) **Downlink**: pegar `lorawan/ttn_downlink_formatter.js`.
+2. **API keys → Add API key**: nombre `thingsboard`, derechos *Read application traffic (uplink)* y *Write downlink
+   application traffic*. Copiar la clave (solo se muestra una vez).
+
+### 5.2 En ThingsBoard (thingsboard.cloud)
+1. **Integrations center → Data converters → +**: tipo *Uplink*, nombre `TTS uplink oryzaflow`, pegar
+   `lorawan/tb_uplink_converter.js`. Otro *Downlink*, nombre `TTS downlink oryzaflow`, pegar
+   `lorawan/tb_downlink_converter.js`.
+2. **Integrations center → Integrations → +**: tipo **The Things Stack** (Industries/Cloud). Uplink converter y
+   downlink converter = los anteriores. Región/host: `nam1.cloud.thethings.industries`; **Application ID**
+   `oryzaflow`; **Tenant ID** `oryzaflow`; API key = la de §5.1. Guardar y comprobar que la integración queda *Active*.
+3. Con el nodo publicando (cada 5 min), en **Devices → oryzaflow-edge-01 → Latest telemetry** deben aparecer
+   `t, rh, me, lot` (y `rssi/snr`). Si la integración creó un device nuevo en vez de usar el existente, el
+   `deviceName` del converter no coincide con el nombre del device; corregirlo.
+4. **Rule chains → Root** (la que reenvía *Post telemetry* a HiveMQ): añadir al *Message Type Switch* las salidas
+   **Attributes Updated** y **Attributes Deleted** → nodo **integration downlink** (integración The Things Stack).
+   Así `ProvisioningService.provision()` (escribe shared attributes) genera un `SET_LOT` y `clear()` (borra claves)
+   un `CLEAR_LOT`, sin tocar el backend.
+
+### 5.3 Prueba
+- `POST /api/v1/batches/{id}/start` en el backend → TB shared attributes → downlink `SET_LOT` → en el serial del nodo
+  `[prov] SET_LOT …` (tras su siguiente uplink, ≤ 5 min) → siguiente uplink con `lot=true`, `m≈m0`, `seg=1`.
+- `segments/close {NOCHE}` → `CLEAR_LOT` → `lot=false`. `POST /segments {m0}` → `SET_LOT` con `segmento=2`.
+- En RDS: `sensor_readings` con `segmento` y `offset_m`.
+
+### Alternativa A (no elegida)
+Puente propio (`bridge/`): suscriptor MQTT de TTS (`v3/oryzaflow@oryzaflow/devices/+/up`) → HiveMQ, y el backend
+llamaría a la API de downlinks de TTS con `decoded_payload`. Queda documentado por si el plan de TB cambia.
