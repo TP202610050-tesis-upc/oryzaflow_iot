@@ -86,7 +86,7 @@
 #define TB_SHARED_KEYS  "loteId,loteInicioTs,m0,mTarget,perfil,k,n,modelo,a,b,segmento,meModel,intervaloEnvioSegundos,offsetT,offsetRh,offsetM,tMax"
 
 // ---- Version de firmware (client attribute fwVersion, ESQUEMA §6; docs/equivalencia_nodo_offline.md) ----
-#define FW_VERSION  "1.2.0"
+#define FW_VERSION  "1.2.1"
 
 // ---- Serial ----
 #define SERIAL_BAUD  115200

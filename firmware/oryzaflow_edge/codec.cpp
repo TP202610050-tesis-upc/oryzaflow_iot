@@ -15,6 +15,10 @@ static inline uint32_t clampU16(int32_t v) { return v < 0 ? 0 : (v > 65535 ? 655
 
 size_t encodeTelemetry(const DryingState& s, uint8_t* out, size_t cap) {
   if (cap < TELEMETRY_CODEC_MAX_BYTES) return 0;
+  if (isnan(s.tC) || isnan(s.rhPct)) {   // sin lectura del sensor: latido de 1 byte con fault (mantiene RX/downlinks)
+    out[0] = 0x10;
+    return 1;
+  }
   uint8_t flags = 0;
   if (s.hasB)  flags |= 0x01;
   if (s.rain)  flags |= 0x02;

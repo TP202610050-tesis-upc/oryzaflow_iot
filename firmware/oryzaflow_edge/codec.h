@@ -7,7 +7,7 @@
 //   [3..4]  rh  uint16 ×100 (%)
 //   [5..6]  me  uint16 ×100 (% b.h.)
 //   si lot: m uint16 ×100 · mr uint16 ×10000 · [dr int16 ×100] · [te uint16 ×100] · [seg uint8] · [om int16 ×100]
-//   Longitudes: 7 B (sin lote) … 18 B (lote completo).
+//   Longitudes: 1 B (solo fault: sensor sin lectura, latido) · 7 B (sin lote) … 18 B (lote completo).
 #include <Arduino.h>
 #include "drying_model.h"
 

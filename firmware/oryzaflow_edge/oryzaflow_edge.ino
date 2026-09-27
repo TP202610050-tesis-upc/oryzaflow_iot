@@ -206,7 +206,20 @@ void loop() {
   }
 
   Sht31Reading s = sht.read();
-  if (!s.ok) { Serial.println("{\"err\":\"sht31\"}"); return; }   // el estado no avanza: el proximo dt cubre el hueco
+  if (!s.ok) {
+    // Sin lectura: el estado del modelo no avanza (el proximo dt cubre el hueco). En LoRaWAN se envia igualmente un
+    // latido de 1 byte con la bandera fault: mantiene la ventana RX (downlinks) y avisa a la red del fallo del sensor.
+    Serial.println("{\"err\":\"sht31\"}");
+#if TRANSPORT_MODE == TRANSPORT_LORAWAN
+    DryingState fault;                       // tC/rhPct = NAN -> encodeTelemetry emite [0x10]
+    uint8_t fb[TELEMETRY_CODEC_MAX_BYTES];
+    size_t fn = encodeTelemetry(fault, fb, sizeof(fb));
+    bool fpub = lorawanSend(fb, fn);
+    Serial.printf("[lora] latido fault %u B publish=%s\n", (unsigned)fn, fpub ? "ok" : "NO");
+    if (!fpub) g_lastPublish = now - g_publishMs + LORAWAN_RETRY_MS;
+#endif
+    return;
+  }
   float t  = s.tempC  + g_offsetT;
   float rh = s.humPct + g_offsetRH;
   bool  rain = rainDetected();

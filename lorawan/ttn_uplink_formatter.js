@@ -10,6 +10,9 @@
 function decodeUplink(input) {
   var b = input.bytes;
   var warnings = [];
+  if (b && b.length === 1 && (b[0] & 0x10)) {
+    return { data: { fault: true }, warnings: ["latido sin lectura del sensor (SHT31)"] };
+  }
   if (!b || b.length < 7) {
     return { data: {}, errors: ["payload demasiado corto (" + (b ? b.length : 0) + " B)"] };
   }

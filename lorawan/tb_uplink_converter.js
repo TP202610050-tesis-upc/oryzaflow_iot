@@ -22,6 +22,7 @@ var base64ToBytesArray = function (s) {
 
 // Mismo codec v1.1 que lorawan/ttn_uplink_formatter.js (ESQUEMA_TELEMETRIA.md §5).
 var decodeBytes = function (b) {
+    if (b && b.length === 1 && (b[0] & 0x10)) return { fault: true };   // latido sin lectura del sensor
     if (!b || b.length < 7) return null;
     var u16 = function (i) { return (b[i] << 8) | b[i + 1]; };
     var s16 = function (i) { var v = u16(i); return v >= 0x8000 ? v - 0x10000 : v; };
@@ -77,6 +78,13 @@ if (up.f_port !== undefined) attributes.fPort = up.f_port;
 if (up.f_cnt !== undefined) attributes.fCnt = up.f_cnt;
 
 var telemetryList = [];
+if (telemetry && telemetry.fault && telemetry.t === undefined) {
+    // Latido de 1 byte (sensor SHT31 sin lectura): NO se publica telemetría (la Rule Chain no lo reenvía a HiveMQ y el
+    // backend no ingiere una lectura vacía); queda registrado como atributo del device para diagnóstico.
+    attributes.sensorFault = true;
+    attributes.sensorFaultTs = ts;
+    telemetry = null;
+}
 if (telemetry) {
     var values = {};
     for (var k in telemetry) values[k] = telemetry[k];
