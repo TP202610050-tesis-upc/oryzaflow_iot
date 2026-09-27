@@ -43,6 +43,19 @@ Serial esperado: `[transporte] LoRaWAN`, auto-test 5/5 PASS (incluye el caso (e)
 `[lora] unido (OTAA)`, `[lora] DeviceTimeReq anexado al uplink`, `{"t":…}` + `[lora] uplink 7 B publish=ok`.
 Sin lote el uplink es de 7 B; con lote, 16–18 B.
 
+**Latido con sensor en falla (firmware 1.2.1, 27/09/2026).** Si el SHT31 no responde, el nodo no calcula ni publica
+telemetría, pero en LoRaWAN envía igualmente un uplink de **1 B = `0x10`** (bandera `fault`) en cada ciclo: mantiene
+la ventana RX (los downlinks de aprovisionamiento siguen llegando) y deja rastro del fallo. Tratamiento aguas abajo:
+- `ttn_uplink_formatter.js` lo decodifica como `{ "fault": true }` con un warning.
+- `tb_uplink_converter.js` **no genera telemetría** para esa trama: la registra como atributos del device
+  `sensorFault = true` y `sensorFaultTs`; así la Rule Chain no la reenvía a HiveMQ.
+- El backend, por si acaso, descarta cualquier trama sin `t`/`rh` (`TelemetryIngestionService`, commit `047c508`):
+  no crea lectura ni marca el nodo ACTIVO, de modo que el watchdog lo lleva a DESCONECTADO («Revisar hardware o
+  energía») si el fallo persiste.
+El converter de TB se actualiza a mano en *Integrations center → Data converters → TTS uplink oryzaflow* pegando el
+contenido actual de `lorawan/tb_uplink_converter.js` (probar con `frm_payload` = `EA==`, es decir `[0x10]`: debe
+salir `telemetry: []` y `attributes.sensorFault: true`).
+
 ## 3. Payload formatters (consola TTS → Applications → oryzaflow → Payload formatters)
 
 - **Uplink**: `lorawan/ttn_uplink_formatter.js` → reconstruye el JSON canónico (`t, rh, rain, me, lot, m, mr, dr, te, seg, om`).
