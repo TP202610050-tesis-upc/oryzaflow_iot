@@ -31,6 +31,31 @@ es 1.0.2 pero el join/clase A es compatible.) Respaldo si no llega la hora: down
 - `codec.cpp`: codec binario v1.1 (ESQUEMA §5). `provisioning.cpp`: `applyDownlink()` (§5.4) y reloj del nodo.
 - El JSON canónico se sigue imprimiendo por serial en cada publicación (sirve para `tools/replay_model.py`).
 
+### 2.1 Entorno de compilación (qué instalar en una máquina nueva)
+
+Con el `git clone` llega el código y esta guía; lo siguiente **no** viene en el repositorio.
+
+| Componente | Versión probada | Notas |
+|---|---|---|
+| Arduino IDE | 2.3.10 (trae `arduino-cli` 1.5.1 embebido) | Sirve la IDE o el CLI; los comandos de §2.2 usan el CLI. |
+| URL adicional de placas | — | *File → Preferences → Additional boards manager URLs*: `https://resource.heltec.cn/download/package_heltec_esp32_index.json` |
+| Core | **Heltec ESP32 Series Arduino Develop Environment** 3.3.8 (`Heltec-esp32:esp32`) | Boards Manager, buscar "Heltec ESP32". |
+| Placa | **Heltec WiFi LoRa 32 (V3)** | Menú *LoRaWan Region* = **REGION_AU915** (por defecto viene EU868: compila igual pero el nodo nunca hace join). Resto de menús por defecto (*LoRaWan DevEUI* = CUSTOM, *LoRaWan Debug Level* = None). En CLI es el sufijo `:LORAWAN_REGION=4` del FQBN. |
+| Librería | Heltec ESP32 Dev-Boards 2.1.6 | OLED (`HT_SSD1306Wire.h`) y pila LoRaWAN (`LoRaWan_APP.h`). |
+| Librería | ArduinoJson 7.4.3 | aprovisionamiento por shared attributes (modo WiFi). |
+| Librería | PubSubClient 2.8 | MQTT a ThingsBoard (modo WiFi). |
+| Librería | Adafruit GFX 1.12.6 + Adafruit BusIO 1.17.4 | dependencias de la librería Heltec. |
+| Driver USB | Silicon Labs CP210x (6.7.6 en Windows 11) | Windows 10/11 lo instala solo al conectar la placa; si no aparece ningún COM, descargarlo de Silicon Labs. El número de COM cambia por máquina: ajustar `-p COMx` en §2.2 y `$puerto` en `tools/monitor_serial.txt`. |
+| `firmware/oryzaflow_edge/secrets.h` | — | Fuera de git (`.gitignore`). Copiar `secrets.h.example` → `secrets.h` y rellenar WiFi/ThingsBoard, DevEUI/AppEUI/AppKey y `HELTEC_LICENSE`; o pasar el archivo real por un canal seguro (nunca por el repo). |
+| Licencia Heltec | — | La pila LoRaWAN precompilada exige una licencia **por chip** (ChipID de esta placa: `A453759E9EF0`; se imprime por serial si falta). Gratis en `https://resource.heltec.cn/search`. La misma placa funciona en cualquier PC; otra placa necesita otra licencia. |
+| Python (solo herramientas) | 3.x | `tools/replay_model.py` usa solo librería estándar. `bridge/mqtt_test_subscriber.py` necesita `pip install paho-mqtt` y un `bridge/broker_config.py` (fuera de git; define `HIVEMQ_HOST`, `HIVEMQ_PORT`, `HIVEMQ_USER`, `HIVEMQ_PASS`, `TOPIC`). |
+
+El driver del SHT31 (`sht31.cpp`) es propio del sketch y no requiere librería. `net_thingsboard.cpp` y `net_lorawan.cpp`
+incluyen `secrets.h` solo dentro de su guarda `#if TRANSPORT_MODE == …`, así que el firmware compila con el bloque del
+transporte activo; conviene igualmente dejar los dos bloques rellenos para alternar `TRANSPORT_MODE` sin tocar `secrets.h`.
+
+### 2.2 Compilar y subir
+
 Compilar y subir (la región va en el menú de placa, `LORAWAN_REGION=4` = AU915):
 
 ```powershell
